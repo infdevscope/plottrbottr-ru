@@ -11,7 +11,10 @@
     <div>
       <h1>Plottrbottr RU</h1>
     </div>
-    <div class="headerActions"><label class="themeToggle"><input id="darkTheme" type="checkbox"> Тёмная тема</label><button id="download" disabled>Скачать SVG</button></div>
+    <div class="headerActions">
+      <label class="themeToggle"><input id="darkTheme" type="checkbox"> Тёмная тема</label>
+      <button id="downloadSvg" disabled>Скачать SVG</button>
+    </div>
   </header>
 
   <main>
@@ -22,7 +25,13 @@
         <label class="check wide"><input id="autoParams" type="checkbox" checked> Автоподбор параметров</label>
         <label>Количество ячеек<input id="numExtraPoints" type="number" step="1" value="120"></label>
         <label>Отступ от контура SVG-файла<input id="safeBorder" type="number" step="0.1" value="0.5"></label>
-        <label>Размер фигуры<input id="outlineSize" type="number" step="0.1" value="2"></label>
+        <label id="outlineSizeLabel">Размер фигуры<input id="outlineSize" type="number" step="1" min="1" value="2"></label>
+        <label>Тип заполнения
+          <select id="fillMode">
+            <option value="grid" selected>Сетка фигур</option>
+            <option value="contours">Замкнутые линии</option>
+          </select>
+        </label>
         <label>Фигура сетки
           <select id="patternShape">
             <option value="triangle" selected>Треугольник</option>
@@ -37,7 +46,7 @@
             <option value="clip">Обрезать без уменьшения</option>
           </select>
         </label>
-        <label class="check wide"><input id="hideGrid" type="checkbox"> Скрыть сетку</label>
+        <label id="hideGridLabel" class="check wide"><input id="hideGrid" type="checkbox"> Скрыть заполнение</label>
       </div>
       <button id="generate">Построить</button>
       <p id="status">Загрузите SVG — предпросмотр будет обновляться автоматически.</p>

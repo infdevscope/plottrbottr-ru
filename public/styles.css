@@ -56,3 +56,25 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 .previewInner svg { display: block; background: var(--svg-bg); box-shadow: 0 8px 24px rgba(24, 39, 75, .10); }
 #status { min-height: 44px; }
 @media (max-width: 900px) { main { grid-template-columns: 1fr; } header, .previewHead, .headerActions { flex-direction: column; align-items: flex-start; } }
+
+/* Visual emphasis for active vs unavailable settings */
+.controls label {
+  font-weight: 800;
+}
+.controls label.control-disabled {
+  font-style: italic;
+  font-weight: 400;
+  opacity: .38;
+}
+.controls label.control-disabled input,
+.controls label.control-disabled select {
+  opacity: .55;
+  cursor: not-allowed;
+}
+.controls label.control-disabled select,
+.controls label.control-disabled input {
+  filter: saturate(.45);
+}
+body.dark .controls label.control-disabled {
+  opacity: .32;
+}

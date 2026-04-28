@@ -1,6 +1,6 @@
 const $ = (id) => document.getElementById(id);
 const state = { svgText: '', result: '', autoTimer: null, buildId: 0 };
-const CONTROL_IDS = ['autoParams','numExtraPoints','safeBorder','outlineSize','patternShape','edgeMode','hideGrid'];
+const CONTROL_IDS = ['autoParams','numExtraPoints','safeBorder','outlineSize','fillMode','patternShape','edgeMode','hideGrid'];
 
 const NS = 'http://www.w3.org/2000/svg';
 const rnd = (n) => Math.round(n * 1000) / 1000;
@@ -33,6 +33,7 @@ function getOptions() {
     safeBorder: +$("safeBorder").value || 0.5,
     outlineSize: +$("outlineSize").value || 2,
     curveSamples: 8,
+    fillMode: $("fillMode")?.value || "grid",
     patternShape: $("patternShape").value || "triangle",
     edgeMode: $("edgeMode")?.value || "shrink",
     hideGrid: $("hideGrid")?.checked || false
@@ -693,6 +694,46 @@ function syncInputsFromOptions(options) {
   $('outlineSize').value = rnd(options.outlineSize);
 }
 
+function inwardStepLine(poly, center, step) {
+  return poly.map((p) => {
+    const dx = center.x - p.x, dy = center.y - p.y;
+    const len = Math.hypot(dx, dy) || 1;
+    const move = Math.min(step, len * 0.92);
+    return { x: p.x + dx / len * move, y: p.y + dy / len * move };
+  });
+}
+
+function generateClosedStraightLines(regionContours, lineCount, safe) {
+  // Режим замкнутых линий: количество задаётся полем «Количество линий».
+  // 1 = одна линия по контуру; 3 = контур + две вложенные линии и т.д.
+  const lines = [];
+  const count = Math.max(1, Math.round(Number(lineCount) || 1));
+  const border = Math.max(0, Number(safe) || 0);
+
+  for (const contour of regionContours) {
+    const base = (contour.points || contour).map(p => ({ x: p.x, y: p.y }));
+    if (base.length < 3 || Math.abs(area(base)) < 0.5) continue;
+
+    const c = centroid(base);
+    const radii = base.map(p => Math.hypot(p.x - c.x, p.y - c.y));
+    const maxR = Math.max(...radii, 1);
+    const positive = radii.filter(v => v > 0.001);
+    const minR = Math.max(0.8, positive.length ? Math.min(...positive) : maxR);
+    const usableR = Math.max(1, maxR - border);
+    const step = count === 1 ? 0 : usableR / count;
+
+    for (let i = 0; i < count; i++) {
+      const offset = border + i * step;
+      const k = Math.max(0.02, 1 - offset / maxR);
+      if (k * minR < 0.35) break;
+      const poly = scaleAround(base, c, k).filter((p, idx, arr) => idx === 0 || dist(p, arr[idx - 1]) > 0.05);
+      if (poly.length < 3 || Math.abs(area(poly)) < 0.25) break;
+      lines.push(poly);
+    }
+  }
+  return lines;
+}
+
 function build() {
   const o = getOptions();
   if (!state.svgText) throw new Error('Сначала выберите SVG-файл.');
@@ -716,19 +757,19 @@ function build() {
   contours.forEach(c => outlines.push(c));
 
   if (!o.hideGrid) {
-    // Строим сетку не по каждому найденному контуру отдельно, а по итоговой черной области SVG.
-    // Это не дает сетке попадать в белые отверстия и в пространство между разными под-контурами.
     const region = closedContours.map(c => ({ ...c, points: c.points }));
-    // Не сжимаем контуры через shrink(): на сложных SVG с отверстиями это давало выход сетки за контур.
-    // Отступ теперь проверяется геометрически по исходной черной области и расстоянию до всех контуров.
-    cells.push(...patternGridCellsInRegion(region, Math.max(4, Math.round(o.numExtraPoints)), gap, o));
+    if ((o.fillMode || 'grid') === 'contours') {
+      cells.push(...generateClosedStraightLines(region, gap, 0));
+    } else {
+      cells.push(...patternGridCellsInRegion(region, Math.max(4, Math.round(o.numExtraPoints)), gap, o));
+    }
   }
 
   const vb = bbox(outlines.flatMap(c => c.points)); const width = vb.maxX - vb.minX + 80, height = vb.maxY - vb.minY + 80;
   const join = 'miter';
   let svg = `<svg xmlns="${NS}" viewBox="0 0 ${rnd(width)} ${rnd(height)}" width="${rnd(width)}" height="${rnd(height)}">`;
   svg += `<rect width="100%" height="100%" fill="white"/>`;
-  if ((o.edgeMode || 'shrink') === 'clip') {
+  if ((o.edgeMode || 'shrink') === 'clip' || (o.fillMode || 'grid') === 'contours') {
     const clipId = `regionClip`;
     svg += `<defs><clipPath id="${clipId}" clipPathUnits="userSpaceOnUse">`;
     svg += `<path fill="black" clip-rule="evenodd" fill-rule="evenodd" d="${closedContours.map(c => pathD(c.points, true)).join(' ')}"/>`;
@@ -737,7 +778,7 @@ function build() {
     for (const outer of outlines) svg += `<path d="${pathD(outer.points, outer.closed)}"/>`;
     svg += `</g>`;
     svg += `<g clip-path="url(#${clipId})" fill="none" stroke="black" stroke-width="1" stroke-linejoin="${join}" stroke-linecap="round">`;
-    for (const cell of cells) svg += `<path d="${pathD(shrink(cell, gap))}"/>`;
+    for (const cell of cells) svg += `<path d="${pathD((o.fillMode || 'grid') === 'contours' ? cell : shrink(cell, gap))}"/>`;
     svg += `</g>`;
   } else {
     svg += `<g fill="none" stroke="black" stroke-width="1" stroke-linejoin="${join}" stroke-linecap="round">`;
@@ -809,7 +850,7 @@ function renderNow(source = 'manual') {
     state.result = svg;
     $('previewInner').innerHTML = svg;
     updatePreviewScale();
-    $('download').disabled = false;
+    setDownloadButtonsDisabled(false);
     $('status').textContent = 'Предпросмотр обновлён';
   } catch (err) {
     if (source !== 'auto' || state.svgText) $('status').textContent = err.message;
@@ -831,6 +872,7 @@ $('file').addEventListener('change', async (e) => {
   const f = e.target.files[0]; if (!f) return;
   state.svgText = await f.text();
   $('autoParams').checked = true;
+  updateControlsForFillMode();
   $('status').textContent = `Загружено: ${f.name}. Предпросмотр строится автоматически.`;
   scheduleRender();
 });
@@ -838,6 +880,7 @@ $('file').addEventListener('change', async (e) => {
 CONTROL_IDS.forEach((id) => {
   const el = $(id);
   const onControlChange = () => {
+    if (id === 'fillMode') updateControlsForFillMode();
     if (id !== 'autoParams' && $('autoParams')?.checked) $('autoParams').checked = false;
     scheduleRender();
   };
@@ -847,10 +890,113 @@ CONTROL_IDS.forEach((id) => {
 
 $('generate').addEventListener('click', () => renderNow('manual'));
 
-$('download').addEventListener('click', () => {
-  const blob = new Blob([state.result], { type: 'image/svg+xml' });
-  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'plottrbottr-ru.svg'; a.click(); URL.revokeObjectURL(a.href);
-});
+function setDownloadButtonsDisabled(disabled) {
+  const el = $('downloadSvg');
+  if (el) el.disabled = disabled;
+}
+
+function updateControlsForFillMode() {
+  const isContours = ($('fillMode')?.value || 'grid') === 'contours';
+  const disabledInContours = ['numExtraPoints', 'safeBorder', 'patternShape', 'edgeMode'];
+  disabledInContours.forEach((id) => {
+    const el = $(id);
+    if (!el) return;
+    el.disabled = isContours;
+    const label = el.closest('label');
+    if (label) label.classList.toggle('control-disabled', isContours);
+  });
+
+  // The fill type and line-count controls remain active, so make sure they look active.
+  ['fillMode', 'outlineSize'].forEach((id) => {
+    const el = $(id);
+    const label = el?.closest('label');
+    if (label) label.classList.remove('control-disabled');
+  });
+
+  const outlineLabel = $('outlineSizeLabel');
+  if (outlineLabel && outlineLabel.firstChild) {
+    outlineLabel.firstChild.nodeValue = isContours ? 'Количество линий' : 'Размер фигуры';
+  }
+
+  const outlineInput = $('outlineSize');
+  if (outlineInput) {
+    outlineInput.step = isContours ? '1' : '0.1';
+    outlineInput.min = isContours ? '1' : '0.1';
+    if (isContours) outlineInput.value = Math.max(1, Math.round(Number(outlineInput.value) || 1));
+  }
+
+  const hideLabel = $('hideGridLabel');
+  if (hideLabel && hideLabel.childNodes.length > 1) {
+    hideLabel.childNodes[1].nodeValue = ' Скрыть заполнение';
+  }
+}
+
+function saveBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.style.display = 'none';
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => {
+    a.remove();
+    URL.revokeObjectURL(url);
+  }, 250);
+}
+
+function normalizedSvgText() {
+  if (!state.result) return '';
+  const doc = new DOMParser().parseFromString(state.result, 'image/svg+xml');
+  const svg = doc.documentElement;
+  if (!svg || svg.tagName.toLowerCase() !== 'svg') return state.result;
+  svg.setAttribute('xmlns', NS);
+  svg.setAttribute('xmlns:xlink', 'http://www.w3.org/1999/xlink');
+  return new XMLSerializer().serializeToString(svg);
+}
+
+function downloadSvgFile() {
+  const svgText = normalizedSvgText();
+  if (!svgText) return;
+  saveBlob(new Blob([svgText], { type: 'image/svg+xml;charset=utf-8' }), 'plottrbottr-ru.svg');
+}
+
+async function downloadRasterFile(format) {
+  const svgText = normalizedSvgText();
+  if (!svgText) return;
+  const mime = format === 'jpeg' ? 'image/jpeg' : 'image/png';
+  const ext = format === 'jpeg' ? 'jpg' : 'png';
+  const svgDoc = new DOMParser().parseFromString(svgText, 'image/svg+xml').documentElement;
+  const vb = svgDoc.getAttribute('viewBox')?.trim().split(/\s+/).map(Number);
+  const width = Math.max(1, Math.ceil((vb && vb[2]) || parseFloat(svgDoc.getAttribute('width')) || 1000));
+  const height = Math.max(1, Math.ceil((vb && vb[3]) || parseFloat(svgDoc.getAttribute('height')) || 1000));
+
+  const img = new Image();
+  const encoded = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svgText);
+  try {
+    await new Promise((resolve, reject) => {
+      img.onload = resolve;
+      img.onerror = () => reject(new Error('Не удалось подготовить изображение для экспорта'));
+      img.src = encoded;
+    });
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, width, height);
+    ctx.drawImage(img, 0, 0, width, height);
+    const blob = await new Promise((resolve) => canvas.toBlob(resolve, mime, format === 'jpeg' ? 0.95 : undefined));
+    if (!blob) throw new Error('Не удалось создать файл');
+    saveBlob(blob, `plottrbottr-ru.${ext}`);
+  } catch (err) {
+    $('status').textContent = err.message;
+    console.error(err);
+  }
+}
+
+$('downloadSvg')?.addEventListener('click', downloadSvgFile);
+updateControlsForFillMode();
 
 $('previewScale').addEventListener('input', (e) => setPreviewScaleValue(e.target.value, 'slider'));
 $('previewScaleNumber')?.addEventListener('change', (e) => setPreviewScaleValue(e.target.value, 'number'));
